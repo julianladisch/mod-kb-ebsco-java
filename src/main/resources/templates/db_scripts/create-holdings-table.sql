@@ -1,2 +1,2 @@
-ALTER TABLE holdings
-ALTER COLUMN id TYPE VARCHAR (50);
+ALTER TABLE holdings_status
+ADD COLUMN IF NOT EXISTS statusDetails VARCHAR (500);

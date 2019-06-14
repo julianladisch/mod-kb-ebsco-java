@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "Content Type Schema",
+  "description": "Content Type Schema",
+  "javaType": "org.folio.rest.jaxrs.model.LoadStatusEnum",
+  "type": "string",
+  "additionalProperties": false,
+  "enum": [
+    "Not Started",
+    "Started",
+    "In Progress",
+    "Completed",
+    "Failed"
+  ]
+}

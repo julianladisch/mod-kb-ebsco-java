@@ -6,7 +6,7 @@ import static org.folio.repository.holdings.LoadStatus.IN_PROGRESS;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
+import java.util.function.Function;
 
 import io.vertx.core.Vertx;
 import io.vertx.core.logging.Logger;
@@ -19,6 +19,7 @@ import org.folio.holdingsiq.model.Holding;
 import org.folio.holdingsiq.model.HoldingsLoadStatus;
 import org.folio.repository.holdings.DbHolding;
 import org.folio.repository.holdings.HoldingsRepository;
+import org.folio.repository.holdings.HoldingsStatusRepository;
 import org.folio.repository.holdings.LoadStatus;
 import org.folio.repository.resources.DbResource;
 import org.folio.rest.util.template.RMAPITemplateContext;
@@ -32,28 +33,31 @@ public class HoldingsServiceImpl implements HoldingsService {
   private long delay;
   private int retryCount;
   private HoldingsRepository holdingsRepository;
+  private HoldingsStatusRepository holdingsStatusRepository;
 
   @Autowired
   public HoldingsServiceImpl(Vertx vertx, HoldingsRepository holdingsRepository,
                              @Value("${holdings.status.check.delay}") long delay,
-                             @Value("${holdings.status.retry.count}") int retryCount) {
+                             @Value("${holdings.status.retry.count}") int retryCount,
+                             HoldingsStatusRepository holdingsLoadStatus) {
     this.vertx = vertx;
     this.holdingsRepository = holdingsRepository;
     this.delay = delay;
     this.retryCount = retryCount;
+    this.holdingsStatusRepository = holdingsLoadStatus;
   }
 
   public CompletableFuture<Void> loadHoldings(RMAPITemplateContext context, String tenantId) {
     return populateHoldings(context)
       .thenCompose(isSuccessful -> waitForCompleteStatus(context, retryCount))
-      .thenCompose(loadStatus -> holdingsRepository.removeHoldings(tenantId)
+      .thenCompose(loadStatus -> holdingsRepository.deleteAll(tenantId)
         .thenCompose(o -> loadHoldings(context, loadStatus.getTotalCount(), tenantId))
       );
   }
 
   @Override
   public CompletableFuture<List<DbHolding>> getHoldingsByIds(String tenant, List<DbResource> resourcesResult) {
-    return holdingsRepository.getHoldingsByIds(tenant, getTitleIdsAsList(resourcesResult));
+    return holdingsRepository.getByIds(tenant, getTitleIdsAsList(resourcesResult));
   }
 
   private List<String> getTitleIdsAsList(List<DbResource> resources){
@@ -65,9 +69,11 @@ public class HoldingsServiceImpl implements HoldingsService {
     return getLoadingStatus(context).thenCompose(loadStatus -> {
       final LoadStatus other = LoadStatus.fromValue(loadStatus.getStatus());
       if (IN_PROGRESS.equals(other)) {
+//        holdingsStatusRepository.update()
         return CompletableFuture.completedFuture(null);
       } else {
         logger.info("Start populating holdings to stage environment.");
+//        holdingsStatusRepository.update()
         return context.getLoadingService().populateHoldings();
       }
     });
@@ -132,17 +138,23 @@ public class HoldingsServiceImpl implements HoldingsService {
   }
 
   private CompletableFuture<Void> saveHolding(List<Holding> holdings, String tenantId) {
-    List<DbHolding> dbHoldings = holdings.stream()
-      .map(holding -> new DbHolding(
-        holding.getTitleId(),
-        holding.getPackageId(),
-        holding.getVendorId(),
-        holding.getPublicationTitle(),
-        holding.getPublisherName(),
-        holding.getResourceType()
-      ))
-      .collect(Collectors.toList());
     logger.info("Saving holdings to database.");
-    return holdingsRepository.saveHoldings(dbHoldings, tenantId);
+    return holdingsRepository.save(mapItems(holdings, getHoldingMapping()), tenantId);
+  }
+
+  private Function<Holding, DbHolding> getHoldingMapping() {
+    return holding -> new DbHolding(
+      holding.getTitleId(),
+      holding.getPackageId(),
+      holding.getVendorId(),
+      holding.getPublicationTitle(),
+      holding.getPublisherName(),
+      holding.getResourceType()
+    );
+  }
+
+  private String getResourceIdMapping(DbResource dbResource) {
+    return dbResource.getId().getProviderIdPart() + "-"
+      + dbResource.getId().getPackageIdPart() + "-" + dbResource.getId().getTitleIdPart();
   }
 }

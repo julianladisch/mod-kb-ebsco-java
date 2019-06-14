@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "Load Status Details Schema",
+  "description": "Load Status Details Schema",
+  "javaType": "org.folio.rest.jaxrs.model.LoadDetailsEnum",
+  "type": "string",
+  "additionalProperties": false,
+  "enum": [
+    "Populated to holdings",
+    "Loading holdings",
+    "Saving holdings"
+  ]
+}

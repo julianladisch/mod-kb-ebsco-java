@@ -140,6 +140,11 @@
           "methods": ["POST"],
           "pathPattern": "/loadHoldings",
           "permissionsRequired": ["kb-ebsco.holdings.load.post"]
+        },
+        {
+          "methods": ["GET"],
+          "pathPattern": "/loadHoldings/status",
+          "permissionsRequired": ["kb-ebsco.holdings.load.status.get"]
         }
       ]
     },

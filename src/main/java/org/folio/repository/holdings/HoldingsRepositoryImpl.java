@@ -44,7 +44,7 @@ public class HoldingsRepositoryImpl implements HoldingsRepository {
   }
 
   @Override
-  public CompletableFuture<Void> saveHoldings(List<DbHolding> holdings, String tenantId) {
+  public CompletableFuture<Void> save(List<DbHolding> holdings, String tenantId) {
     return executeInTransaction(tenantId, vertx, (postgresClient, connection) -> {
       List<List<DbHolding>> batches = Lists.partition(holdings, MAX_BATCH_SIZE);
       CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
@@ -67,7 +67,7 @@ public class HoldingsRepositoryImpl implements HoldingsRepository {
   }
 
   @Override
-  public CompletableFuture<Void> removeHoldings(String tenantId){
+  public CompletableFuture<Void> deleteAll(String tenantId){
     final String query = String.format(REMOVE_FROM_HOLDINGS, getHoldingsTableName(tenantId));
     LOG.info("Do delete query = " + query);
     PostgresClient postgresClient = PostgresClient.getInstance(vertx, tenantId);
@@ -77,7 +77,7 @@ public class HoldingsRepositoryImpl implements HoldingsRepository {
   }
 
   @Override
-  public CompletableFuture<List<DbHolding>> getHoldingsByIds(String tenantId, List<String> resourceIds) {
+  public CompletableFuture<List<DbHolding>> getByIds(String tenantId, List<String> resourceIds) {
     final String resourceIdString = resourceIds.isEmpty() ? "''" :
       resourceIds.stream().map(id -> "'" + id.concat("'")).collect(Collectors.joining(","));
     final String query = String.format(GET_HOLDINGS_BY_IDS, getHoldingsTableName(tenantId), resourceIdString);

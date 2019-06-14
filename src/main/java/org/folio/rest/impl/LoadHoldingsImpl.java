@@ -1,5 +1,6 @@
 package org.folio.rest.impl;
 
+import static org.folio.rest.tools.utils.TenantTool.calculateTenantId;
 import static org.folio.rest.util.RestConstants.OKAPI_TENANT_HEADER;
 
 import java.util.Map;
@@ -14,8 +15,8 @@ import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import org.folio.repository.holdings.HoldingsStatusRepository;
 import org.folio.rest.jaxrs.resource.LoadHoldings;
-import org.folio.rest.tools.utils.TenantTool;
 import org.folio.rest.util.template.RMAPITemplate;
 import org.folio.rest.util.template.RMAPITemplateFactory;
 import org.folio.service.holdings.HoldingsService;
@@ -28,6 +29,8 @@ public class LoadHoldingsImpl implements LoadHoldings {
   private RMAPITemplateFactory templateFactory;
   @Autowired
   private HoldingsService holdingsService;
+  @Autowired
+  private HoldingsStatusRepository holdingsStatusRepository;
 
 
   public LoadHoldingsImpl() {
@@ -38,10 +41,18 @@ public class LoadHoldingsImpl implements LoadHoldings {
   public void postLoadHoldings(String contentType, Map<String, String> okapiHeaders,
                                Handler<AsyncResult<Response>> asyncResultHandler, Context vertxContext) {
     logger.info("Received signal to start scheduled loading of holdings");
-    String tenantId = TenantTool.calculateTenantId(okapiHeaders.get(OKAPI_TENANT_HEADER));
+    String tenantId = calculateTenantId(okapiHeaders.get(OKAPI_TENANT_HEADER));
     RMAPITemplate template = templateFactory.createTemplate(okapiHeaders, asyncResultHandler);
     template.requestAction(context -> holdingsService.loadHoldings(context, tenantId));
     template.execute();
+  }
+
+
+  @Override
+  public void getLoadHoldingsStatus(String contentType, Map<String, String> okapiHeaders,
+                                    Handler<AsyncResult<Response>> asyncResultHandler, Context vertxContext) {
+    String tenantId = calculateTenantId(okapiHeaders.get(OKAPI_TENANT_HEADER));
+//    holdingsStatusRepository.update(tenantId);
   }
 }
 

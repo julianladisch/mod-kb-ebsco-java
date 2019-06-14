@@ -47,6 +47,13 @@
       "withMetadata": false,
       "withAuditing": false,
       "customSnippetPath": "create-holdings-table.sql"
+    },
+    {
+      "tableName": "holdings_status",
+      "pkColumnName": "id",
+      "generateId": false,
+      "withMetadata": false,
+      "withAuditing": false
     }
   ]
 }
