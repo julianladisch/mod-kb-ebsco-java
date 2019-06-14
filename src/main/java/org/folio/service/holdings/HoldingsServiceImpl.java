@@ -8,13 +8,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
-import io.vertx.core.Vertx;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-
 import org.folio.holdingsiq.model.Holding;
 import org.folio.holdingsiq.model.HoldingsLoadStatus;
 import org.folio.repository.holdings.DbHolding;
@@ -23,6 +16,13 @@ import org.folio.repository.holdings.HoldingsStatusRepository;
 import org.folio.repository.holdings.LoadStatus;
 import org.folio.repository.resources.DbResource;
 import org.folio.rest.util.template.RMAPITemplateContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import io.vertx.core.Vertx;
+import io.vertx.core.logging.Logger;
+import io.vertx.core.logging.LoggerFactory;
 
 @Component
 public class HoldingsServiceImpl implements HoldingsService {
@@ -34,6 +34,7 @@ public class HoldingsServiceImpl implements HoldingsService {
   private int retryCount;
   private HoldingsRepository holdingsRepository;
   private HoldingsStatusRepository holdingsStatusRepository;
+  private final LoadServiceFacade loadServiceFacade;
 
   @Autowired
   public HoldingsServiceImpl(Vertx vertx, HoldingsRepository holdingsRepository,
@@ -45,6 +46,10 @@ public class HoldingsServiceImpl implements HoldingsService {
     this.delay = delay;
     this.retryCount = retryCount;
     this.holdingsStatusRepository = holdingsLoadStatus;
+
+    //TODO set correct address
+    String address = "address";
+    loadServiceFacade = LoadServiceFacade.createProxy(vertx, "");
   }
 
   public CompletableFuture<Void> loadHoldings(RMAPITemplateContext context, String tenantId) {
@@ -109,13 +114,13 @@ public class HoldingsServiceImpl implements HoldingsService {
   public CompletableFuture<Void> loadHoldings(RMAPITemplateContext context, Integer totalCount, String tenantId) {
 
     CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
-    final int totalRequestCount = getRequestCount(totalCount);
-    for (int iteration = 1; iteration < totalRequestCount + 1; iteration++) {
-      int finalIteration = iteration;
-      future = future
-        .thenCompose(o -> context.getLoadingService().loadHoldings(MAX_COUNT, finalIteration))
-        .thenCompose(holding -> saveHolding(holding.getHoldingsList(), tenantId));
-    }
+//    final int totalRequestCount = getRequestCount(totalCount);
+//    for (int iteration = 1; iteration < totalRequestCount + 1; iteration++) {
+//      int finalIteration = iteration;
+//      future = future
+//        .thenCompose(o -> context.getLoadingService().loadHoldings(MAX_COUNT, finalIteration))
+//        .thenCompose(holding -> saveHolding(holding.getHoldingsList(), tenantId));
+//    }
     return future;
   }
 
@@ -137,9 +142,17 @@ public class HoldingsServiceImpl implements HoldingsService {
     return context.getLoadingService().getLoadingStatus();
   }
 
-  private CompletableFuture<Void> saveHolding(List<Holding> holdings, String tenantId) {
+  @Override
+  public void saveHolding(HoldingsMessage holdings, String tenantId) {
     logger.info("Saving holdings to database.");
-    return holdingsRepository.save(mapItems(holdings, getHoldingMapping()), tenantId);
+    holdingsRepository.save(mapItems(holdings.getHoldingList(), getHoldingMapping()), tenantId);
+  }
+
+  @Override
+  public void snapshotCreated(String tenantId) {
+    //TODO Call LoadService
+    //loadServiceFacade.startLoading(null);
+
   }
 
   private Function<Holding, DbHolding> getHoldingMapping() {
