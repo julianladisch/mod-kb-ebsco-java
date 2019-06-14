@@ -13,6 +13,7 @@ import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
+
 import org.springframework.beans.factory.annotation.Autowired;
 
 import org.folio.repository.holdings.HoldingsStatusRepository;
@@ -41,9 +42,8 @@ public class LoadHoldingsImpl implements LoadHoldings {
   public void postLoadHoldings(String contentType, Map<String, String> okapiHeaders,
                                Handler<AsyncResult<Response>> asyncResultHandler, Context vertxContext) {
     logger.info("Received signal to start scheduled loading of holdings");
-    String tenantId = calculateTenantId(okapiHeaders.get(OKAPI_TENANT_HEADER));
     RMAPITemplate template = templateFactory.createTemplate(okapiHeaders, asyncResultHandler);
-    template.requestAction(context -> holdingsService.loadHoldings(context, tenantId));
+    template.requestAction(context -> holdingsService.loadHoldings(context));
     template.execute();
   }
 
