@@ -16,11 +16,6 @@ import org.folio.rest.util.template.RMAPITemplateContext;
 @VertxGen
 public interface HoldingsService {
   @GenIgnore
-  static HoldingsService create(Vertx vertx) {
-    return new HoldingsServiceImpl(vertx);
-  }
-
-  @GenIgnore
   static HoldingsService createProxy(Vertx vertx, String address) {
     return new HoldingsServiceVertxEBProxy(vertx, address);
   }

@@ -5,10 +5,6 @@ import io.vertx.core.Vertx;
 
 @ProxyGen
 public interface LoadServiceFacade {
-  static LoadServiceFacade create(Vertx vertx) {
-    return new LoadServiceFacadeImpl(vertx);
-  }
-
   static LoadServiceFacade createProxy(Vertx vertx, String address) {
     return new LoadServiceFacadeVertxEBProxy(vertx, address);
   }

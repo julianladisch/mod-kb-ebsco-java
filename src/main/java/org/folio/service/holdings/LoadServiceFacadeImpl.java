@@ -16,22 +16,23 @@ import org.folio.holdingsiq.service.LoadService;
 import org.folio.holdingsiq.service.impl.LoadServiceImpl;
 import org.folio.repository.holdings.HoldingConstants;
 import org.folio.repository.holdings.LoadStatus;
-import org.folio.spring.SpringContextUtil;
 
 public class LoadServiceFacadeImpl implements LoadServiceFacade {
   private static final int MAX_COUNT = 5000;
   private static final Logger logger = LoggerFactory.getLogger(LoadServiceFacadeImpl.class);
-  @Value("${holdings.status.check.delay}")
-  private long delay;
-  @Value("${holdings.status.retry.count}")
-  private int retryCount;
 
-  private final HoldingsService holdingsService;
+  private long delay;
+  private int retryCount;
   private Vertx vertx;
-  public LoadServiceFacadeImpl(Vertx vertx) {
-    SpringContextUtil.autowireDependencies(this, vertx.getOrCreateContext());
-    holdingsService = HoldingsService.createProxy(vertx, HoldingConstants.HOLDINGS_SERVICE_ADDRESS);
+  private final HoldingsService holdingsService;
+
+  public LoadServiceFacadeImpl(@Value("${holdings.status.check.delay}") long delay,
+                               @Value("${holdings.status.retry.count}") int retryCount,
+                               Vertx vertx) {
+    this.delay = delay;
+    this.retryCount = retryCount;
     this.vertx = vertx;
+    holdingsService = HoldingsService.createProxy(vertx, HoldingConstants.HOLDINGS_SERVICE_ADDRESS);
   }
 
   @Override

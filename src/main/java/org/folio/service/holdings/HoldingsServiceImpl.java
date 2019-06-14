@@ -11,7 +11,6 @@ import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import org.folio.holdingsiq.model.Holding;
@@ -21,27 +20,22 @@ import org.folio.repository.holdings.HoldingsRepository;
 import org.folio.repository.holdings.HoldingsStatusRepository;
 import org.folio.repository.resources.DbResource;
 import org.folio.rest.util.template.RMAPITemplateContext;
-import org.folio.spring.SpringContextUtil;
 
 @Component
 public class HoldingsServiceImpl implements HoldingsService {
 
   private static final Logger logger = LoggerFactory.getLogger(HoldingsServiceImpl.class);
-  private Vertx vertx;
-  @Value("${holdings.status.check.delay}")
-  private long delay;
-  @Value("${holdings.status.retry.count}")
-  private int retryCount;
-  @Autowired
   private HoldingsRepository holdingsRepository;
-  @Autowired
   private HoldingsStatusRepository holdingsStatusRepository;
   private final LoadServiceFacade loadServiceFacade;
 
-  public HoldingsServiceImpl(Vertx vertx) {
-    this.vertx = vertx;
-    SpringContextUtil.autowireDependencies(this, vertx.getOrCreateContext());
-    loadServiceFacade = LoadServiceFacade.createProxy(vertx, HoldingConstants.LOAD_FACADE_ADDRESS);
+  @Autowired
+  public HoldingsServiceImpl(Vertx vertx,
+                             HoldingsRepository holdingsRepository,
+                             HoldingsStatusRepository holdingsStatusRepository) {
+    this.holdingsRepository = holdingsRepository;
+    this.holdingsStatusRepository = holdingsStatusRepository;
+    this.loadServiceFacade = LoadServiceFacade.createProxy(vertx, HoldingConstants.LOAD_FACADE_ADDRESS);
   }
 
   @Override
