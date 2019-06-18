@@ -24,6 +24,7 @@ import com.github.tomakehurst.wiremock.matching.UrlPathPattern;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 
 import org.hamcrest.Matchers;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -62,6 +63,8 @@ public class LoadHoldingsImplTest extends WireMockTestBase {
 
   }
 
+  @Ignore("loadHoldings endpoint was changed to return response immediately, " +
+    "instead of returning it after loading is complete")
   @Test
   public void shouldWaitForCompleteStatusAndLoadHoldings() throws IOException, URISyntaxException {
     mockDefaultConfiguration(getWiremockUrl());
