@@ -52,7 +52,11 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
         .thenApply(status -> {
           holdingsService.snapshotCreated(configuration);
           return null;
-        }));
+        }))
+    .exceptionally(throwable -> {
+      logger.error("Failed to create snapshot after " + snapshotRetryCount + " retries");
+      return null;
+    });
   }
 
   @Override
@@ -94,7 +98,7 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
         if (COMPLETED.equals(status)) {
           future.complete(loadStatus);
         } else if (IN_PROGRESS.equals(status)) {
-          if (retries <= 0) {
+          if (retries <= 1) {
             throw new IllegalStateException("Failed to get status with status response:" + loadStatus);
           }
           waitForCompleteStatus(retries - 1, future, loadingService);
@@ -127,7 +131,8 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     futureProducer.call()
       .thenAccept(future::complete)
       .exceptionally(throwable -> {
-        if (retries > 0) {
+        if (retries > 1) {
+          logger.error("Failed to create snapshot, will retry in " + delay + " milliseconds");
           vertx.setTimer(delay, timerId -> retryOnFailure(retries - 1, delay, futureProducer));
         } else {
           future.completeExceptionally(new IllegalStateException());
