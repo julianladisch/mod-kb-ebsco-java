@@ -40,6 +40,8 @@ public class LoadHoldingsImplTest extends WireMockTestBase {
   private static final String LOAD_HOLDINGS_ENDPOINT = "loadHoldings";
   private static final String GET_HOLDINGS_SCENARIO = "Get holdings";
   private static final String COMPLETED_STATE = "Completed state";
+  private static final String RETRY_SCENARIO = "Retry scenario";
+  private static final String SECOND_TRY = "Second try";
 
   @Test
   public void shouldSaveHoldings() throws IOException, URISyntaxException {
@@ -61,6 +63,37 @@ public class LoadHoldingsImplTest extends WireMockTestBase {
     final List<DbHolding> holdingsList = HoldingsTestUtil.getHoldings(vertx);
     assertThat(holdingsList.size(), Matchers.notNullValue());
 
+  }
+
+  @Test
+  public void shouldRetryCreationOfSnapshotWhenItFails() throws IOException, URISyntaxException {
+
+    mockDefaultConfiguration(getWiremockUrl());
+
+    mockGet(new EqualToPattern(HOLDINGS_STATUS_ENDPOINT), "responses/rmapi/holdings/status/get-status-completed.json");
+
+    stubFor(
+      post(new UrlPathPattern(new EqualToPattern(HOLDINGS_POST_HOLDINGS_ENDPOINT), false))
+        .inScenario(RETRY_SCENARIO)
+        .willSetStateTo(SECOND_TRY)
+        .willReturn(new ResponseDefinitionBuilder()
+          .withStatus(500)));
+
+    stubFor(
+      post(new UrlPathPattern(new EqualToPattern(HOLDINGS_POST_HOLDINGS_ENDPOINT), false))
+        .inScenario(RETRY_SCENARIO)
+        .whenScenarioStateIs(SECOND_TRY)
+        .willReturn(new ResponseDefinitionBuilder()
+          .withBody("")
+          .withStatus(202)));
+
+    mockGet(new RegexPattern(HOLDINGS_GET_ENDPOINT), "responses/rmapi/holdings/holdings/get-holdings.json");
+
+    postWithStatus(LOAD_HOLDINGS_ENDPOINT, "", SC_NO_CONTENT);
+
+    //TODO wait until holdings are loaded
+    final List<DbHolding> holdingsList = HoldingsTestUtil.getHoldings(vertx);
+    assertThat(holdingsList.size(), Matchers.notNullValue());
   }
 
   @Ignore("loadHoldings endpoint was changed to return response immediately, " +

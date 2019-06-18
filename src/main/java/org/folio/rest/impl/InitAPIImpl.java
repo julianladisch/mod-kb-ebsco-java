@@ -26,6 +26,7 @@ public class InitAPIImpl implements InitAPI{
     vertx.executeBlocking(
       future -> {
         SpringContextUtil.init(vertx, context, ApplicationConfig.class);
+        SpringContextUtil.autowireDependencies(this, context);
         new ServiceBinder(vertx)
           .setAddress(HoldingConstants.LOAD_FACADE_ADDRESS)
           .register(LoadServiceFacade.class, loadServiceFacade);

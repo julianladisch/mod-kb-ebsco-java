@@ -9,7 +9,9 @@ import io.vertx.core.Vertx;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
 
+import org.glassfish.jersey.internal.util.Producer;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 import org.folio.holdingsiq.model.HoldingsLoadStatus;
 import org.folio.holdingsiq.service.LoadService;
@@ -17,20 +19,26 @@ import org.folio.holdingsiq.service.impl.LoadServiceImpl;
 import org.folio.repository.holdings.HoldingConstants;
 import org.folio.repository.holdings.LoadStatus;
 
+@Component
 public class LoadServiceFacadeImpl implements LoadServiceFacade {
   private static final int MAX_COUNT = 5000;
   private static final Logger logger = LoggerFactory.getLogger(LoadServiceFacadeImpl.class);
-
-  private long delay;
-  private int retryCount;
-  private Vertx vertx;
   private final HoldingsService holdingsService;
+  private long delay;
+  private int statusRetryCount;
+  private long snapshotRetryDelay;
+  private int snapshotRetryCount;
+  private Vertx vertx;
 
   public LoadServiceFacadeImpl(@Value("${holdings.status.check.delay}") long delay,
-                               @Value("${holdings.status.retry.count}") int retryCount,
+                               @Value("${holdings.status.retry.count}") int statusRetryCount,
+                               @Value("${holdings.snapshot.retry.delay}") long snapshotRetryDelay,
+                               @Value("${holdings.snapshot.retry.count}") int snapshotRetryCount,
                                Vertx vertx) {
     this.delay = delay;
-    this.retryCount = retryCount;
+    this.statusRetryCount = statusRetryCount;
+    this.snapshotRetryDelay = snapshotRetryDelay;
+    this.snapshotRetryCount = snapshotRetryCount;
     this.vertx = vertx;
     holdingsService = HoldingsService.createProxy(vertx, HoldingConstants.HOLDINGS_SERVICE_ADDRESS);
   }
@@ -38,11 +46,13 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
   @Override
   public void createSnapshot(ConfigurationMessage configuration) {
     LoadServiceImpl loadingService = new LoadServiceImpl(configuration.getConfiguration(), vertx);
-
-    //TODO retry on failure
-    populateHoldings(loadingService)
-      .thenCompose(isSuccessful -> waitForCompleteStatus(retryCount, loadingService))
-      .thenAccept(status -> holdingsService.snapshotCreated(configuration));
+    retryOnFailure(snapshotRetryCount, snapshotRetryDelay, () ->
+      populateHoldings(loadingService)
+        .thenCompose(isSuccessful -> waitForCompleteStatus(statusRetryCount, loadingService))
+        .thenApply(status -> {
+          holdingsService.snapshotCreated(configuration);
+          return null;
+        }));
   }
 
   @Override
@@ -112,12 +122,26 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     }
   }
 
+  public <T> CompletableFuture<T> retryOnFailure(int retries, long delay, Producer<CompletableFuture<T>> futureProducer) {
+    CompletableFuture<T> future = new CompletableFuture<>();
+    futureProducer.call()
+      .thenAccept(future::complete)
+      .exceptionally(throwable -> {
+        if (retries > 0) {
+          vertx.setTimer(delay, timerId -> retryOnFailure(retries - 1, delay, futureProducer));
+        } else {
+          future.completeExceptionally(new IllegalStateException());
+        }
+        return null;
+      });
+    return future;
+  }
+
   /**
    * Defines an amount of request needed to load all holdings from the staged area
    *
    * @param totalCount - total records count
    * @return number of requests
-   *
    */
   private int getRequestCount(Integer totalCount) {
     final int quotient = totalCount / MAX_COUNT;
