@@ -6,8 +6,10 @@ import org.folio.rest.jaxrs.model.HoldingsLoadingStatus;
 
 public interface HoldingsStatusRepository {
 
-//  CompletableFuture<HoldingsLoadingStatus> get(String tenantId);
+  CompletableFuture<HoldingsLoadingStatus> get(String tenantId);
 
   CompletableFuture<Void> update(HoldingsLoadingStatus loadStatus, String tenantId);
+
+  CompletableFuture<Void> save(HoldingsLoadingStatus loadStatus, String tenantId);
 
 }

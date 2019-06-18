@@ -1,23 +1,32 @@
 package org.folio.rest.impl;
 
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Context;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang.StringUtils;
-import org.folio.rest.annotations.Validate;
-import org.folio.rest.jaxrs.model.TenantAttributes;
-import org.folio.rest.persist.PostgresClient;
-import org.folio.rest.tools.utils.TenantTool;
-import javax.ws.rs.core.Response;
+import static org.folio.repository.holdings.LoadStatusUtils.getLoadStatusNotStarted;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+
+import javax.ws.rs.core.Response;
+
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Context;
+import io.vertx.core.Future;
+import io.vertx.core.Handler;
+import io.vertx.core.Vertx;
+import io.vertx.core.logging.Logger;
+import io.vertx.core.logging.LoggerFactory;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.StringUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import org.folio.repository.holdings.HoldingsStatusRepository;
+import org.folio.rest.annotations.Validate;
+import org.folio.rest.jaxrs.model.TenantAttributes;
+import org.folio.rest.persist.PostgresClient;
+import org.folio.rest.tools.utils.TenantTool;
+import org.folio.spring.SpringContextUtil;
 
 public class TenantApiImpl extends TenantAPI {
 
@@ -27,6 +36,13 @@ public class TenantApiImpl extends TenantAPI {
   private static final String MODULE_PLACEHOLDER = "${mymodule}";
   private static final String TEST_MODE = "test.mode";
   private final Logger logger = LoggerFactory.getLogger(TenantApiImpl.class);
+  @Autowired
+  private HoldingsStatusRepository holdingsStatusRepository;
+
+  public TenantApiImpl() {
+    super();
+    SpringContextUtil.autowireDependencies(this, Vertx.currentContext());
+  }
 
   @Validate
   @Override
@@ -37,8 +53,14 @@ public class TenantApiImpl extends TenantAPI {
         handlers.handle(result);
       } else {
         setupTestData(headers, context).setHandler(event -> handlers.handle(result));
+        setLoadingStatus(headers);
       }
     }, context);
+  }
+
+  private void setLoadingStatus(Map<String, String> headers) {
+    String tenantId = TenantTool.calculateTenantId(headers.get(OKAPI_TENANT_HEADER));
+    holdingsStatusRepository.save(getLoadStatusNotStarted(), tenantId);
   }
 
   private Future<List<String>> setupTestData(Map<String, String> headers, Context context) {

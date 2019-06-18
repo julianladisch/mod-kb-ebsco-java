@@ -2,13 +2,16 @@ package org.folio.service.holdings;
 
 import static org.folio.repository.holdings.LoadStatus.COMPLETED;
 import static org.folio.repository.holdings.LoadStatus.IN_PROGRESS;
+import static org.folio.repository.holdings.LoadStatusUtils.getLoadStatusCompleted;
+import static org.folio.repository.holdings.LoadStatusUtils.getLoadStatusInProgressLoadingHoldings;
+import static org.folio.repository.holdings.LoadStatusUtils.getLoadStatusInProgressPopulatedToHoldings;
 
+import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
 
 import io.vertx.core.Vertx;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
-
 import org.glassfish.jersey.internal.util.Producer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -17,6 +20,8 @@ import org.folio.holdingsiq.model.HoldingsLoadStatus;
 import org.folio.holdingsiq.service.LoadService;
 import org.folio.holdingsiq.service.impl.LoadServiceImpl;
 import org.folio.repository.holdings.HoldingConstants;
+import org.folio.repository.holdings.HoldingsStatusRepository;
+import org.folio.repository.holdings.HoldingsStatusRepositoryImpl;
 import org.folio.repository.holdings.LoadStatus;
 
 @Component
@@ -29,6 +34,7 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
   private long snapshotRetryDelay;
   private int snapshotRetryCount;
   private Vertx vertx;
+  private HoldingsStatusRepository holdingsStatusRepository;
 
   public LoadServiceFacadeImpl(@Value("${holdings.status.check.delay}") long delay,
                                @Value("${holdings.status.retry.count}") int statusRetryCount,
@@ -41,6 +47,7 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     this.snapshotRetryCount = snapshotRetryCount;
     this.vertx = vertx;
     holdingsService = HoldingsService.createProxy(vertx, HoldingConstants.HOLDINGS_SERVICE_ADDRESS);
+    this.holdingsStatusRepository = new HoldingsStatusRepositoryImpl(vertx);
   }
 
   @Override
@@ -51,6 +58,7 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
         .thenCompose(isSuccessful -> waitForCompleteStatus(statusRetryCount, loadingService))
         .thenApply(status -> {
           holdingsService.snapshotCreated(configuration);
+          holdingsStatusRepository.update(getLoadStatusInProgressPopulatedToHoldings(LocalDateTime.now().toString()), configuration.getTenantId());
           return null;
         }))
     .exceptionally(throwable -> {
@@ -66,7 +74,10 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     getLoadingStatus(loadingService)
       .thenAccept(status -> {
         Integer totalCount = status.getTotalCount();
-        loadHoldings(totalCount, configuration.getTenantId(), loadingService);
+        final String tenantId = configuration.getTenantId();
+        holdingsStatusRepository.update(getLoadStatusInProgressLoadingHoldings(LocalDateTime.now().toString(), totalCount), tenantId);
+        loadHoldings(totalCount, tenantId, loadingService);
+        holdingsStatusRepository.update(getLoadStatusCompleted(LocalDateTime.now().toString(), totalCount), tenantId);
       });
   }
 
@@ -74,11 +85,9 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     return getLoadingStatus(loadingService).thenCompose(loadStatus -> {
       final LoadStatus other = LoadStatus.fromValue(loadStatus.getStatus());
       if (IN_PROGRESS.equals(other)) {
-//        holdingsStatusRepository.update()
         return CompletableFuture.completedFuture(null);
       } else {
         logger.info("Start populating holdings to stage environment.");
-//        holdingsStatusRepository.update()
         return loadingService.populateHoldings();
       }
     });
@@ -118,7 +127,8 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
   public void loadHoldings(Integer totalCount, String tenantId, LoadService loadingService) {
     CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
     final int totalRequestCount = getRequestCount(totalCount);
-    for (int iteration = 1; iteration < totalRequestCount + 1; iteration++) {
+//    for (int iteration = 1; iteration < totalRequestCount + 1; iteration++) {
+    for (int iteration = totalRequestCount - 1; iteration < totalRequestCount + 1; iteration++) {
       int finalIteration = iteration;
       future = future
         .thenCompose(o -> loadingService.loadHoldings(MAX_COUNT, finalIteration))

@@ -14,8 +14,11 @@ public class HoldingsTableConstants {
   public static final String GET_HOLDINGS_BY_IDS = "SELECT * from %s WHERE id IN (%s);";
 
   public static final String GET_LOADING_STATUS = "SELECT * from %s;";
-  public static final String INSERT_OR_UPDATE_LOADING_STATUS = "INSERT INTO %s (" + HOLDINGS_FIELD_LIST +
-    ") VALUES %s ON CONFLICT (" + ID_COLUMN + ") DO UPDATE " + "SET " + JSONB_COLUMN + " = ?;";
+  public static final String UPDATE_LOADING_STATUS = "UPDATE %s SET " + JSONB_COLUMN +
+    "= '%s' WHERE id = '1b3d3881-656b-40e1-87ed-a98e2ae5732d'";
+
+  public static final String INSERT_UPDATE_LOADING_STATUS = "INSERT INTO %s (" + HOLDINGS_FIELD_LIST +
+    ") VALUES (%s) ON CONFLICT (" + ID_COLUMN + ") DO UPDATE SET " + JSONB_COLUMN + " = ?;";
 
   private HoldingsTableConstants() { }
 }
