@@ -11,5 +11,5 @@ public interface LoadServiceFacade {
 
   void createSnapshot(ConfigurationMessage configuration);
 
-  void startLoading(ConfigurationMessage configuration);
+  void loadHoldings(ConfigurationMessage configuration);
 }

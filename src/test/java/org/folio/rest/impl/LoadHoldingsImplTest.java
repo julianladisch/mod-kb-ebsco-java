@@ -5,6 +5,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.verify;
 import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
+import static org.apache.http.HttpStatus.SC_INTERNAL_SERVER_ERROR;
 import static org.apache.http.HttpStatus.SC_NO_CONTENT;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
@@ -39,6 +40,7 @@ import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 
 import org.hamcrest.Matchers;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -69,6 +71,7 @@ public class LoadHoldingsImplTest extends WireMockTestBase {
   private static final String SECOND_TRY = "Second try";
   private static int TEST_SNAPSHOT_RETRY_COUNT = 2;
   private Configuration stubConfiguration;
+  private Handler<SendContext> interceptor;
 
   @Before
   public void setUp() throws Exception {
@@ -78,6 +81,13 @@ public class LoadHoldingsImplTest extends WireMockTestBase {
       .customerId(STUB_CUSTOMER_ID)
       .url(getWiremockUrl())
       .build();
+  }
+
+  @After
+  public void tearDown() {
+    if(interceptor!= null){
+      vertx.eventBus().removeInterceptor(interceptor);
+    }
   }
 
   @Test
@@ -120,8 +130,8 @@ public class LoadHoldingsImplTest extends WireMockTestBase {
           .withStatus(202)));
 
     Async async = context.async();
-    vertx.eventBus().addInterceptor(
-      interceptor(HOLDINGS_SERVICE_ADDRESS, SNAPSHOT_CREATED_ACTION, message -> async.complete()));
+    interceptor = interceptor(HOLDINGS_SERVICE_ADDRESS, SNAPSHOT_CREATED_ACTION, message -> async.complete());
+    vertx.eventBus().addInterceptor(interceptor);
 
     LoadServiceFacade proxy = LoadServiceFacade.createProxy(vertx, LOAD_FACADE_ADDRESS);
     proxy.createSnapshot(new ConfigurationMessage(stubConfiguration, STUB_TENANT));
@@ -154,19 +164,70 @@ public class LoadHoldingsImplTest extends WireMockTestBase {
 
     List<HoldingsMessage> messages = new ArrayList<>();
     Async async = context.async(EXPECTED_LOADED_PAGES);
-    vertx.eventBus().addInterceptor(
-      interceptor(HOLDINGS_SERVICE_ADDRESS, SAVE_HOLDINGS_ACTION,
-        message -> {
-          messages.add(((JsonObject)message.body()).getJsonObject("holdings").mapTo(HoldingsMessage.class));
-          async.countDown();
-        }));
+    interceptor = interceptor(HOLDINGS_SERVICE_ADDRESS, SAVE_HOLDINGS_ACTION,
+      message -> {
+        messages.add(((JsonObject) message.body()).getJsonObject("holdings").mapTo(HoldingsMessage.class));
+        async.countDown();
+      });
+    vertx.eventBus().addInterceptor(interceptor);
 
     LoadServiceFacade proxy = LoadServiceFacade.createProxy(vertx, LOAD_FACADE_ADDRESS);
-    proxy.startLoading(new ConfigurationMessage(stubConfiguration, STUB_TENANT));
+    proxy.loadHoldings(new ConfigurationMessage(stubConfiguration, STUB_TENANT));
 
     async.await(TIMEOUT);
     assertEquals(2, messages.size());
     assertEquals(STUB_HOLDINGS_TITLE, messages.get(0).getHoldingList().get(0).getPublicationTitle());
+  }
+
+  @Test
+  public void shouldRetryLoadingPageWhenPageFails(TestContext context) throws IOException, URISyntaxException {
+    mockGet(new EqualToPattern(HOLDINGS_STATUS_ENDPOINT), "responses/rmapi/holdings/status/get-status-completed-one-page.json");
+    UrlPathPattern urlPattern = new UrlPathPattern(new RegexPattern(HOLDINGS_GET_ENDPOINT), true);
+    stubFor(get(urlPattern)
+      .inScenario(RETRY_SCENARIO)
+      .willSetStateTo(SECOND_TRY)
+      .willReturn(new ResponseDefinitionBuilder().withStatus(SC_INTERNAL_SERVER_ERROR)
+      ));
+    stubFor(get(urlPattern)
+      .inScenario(RETRY_SCENARIO)
+      .whenScenarioStateIs(SECOND_TRY)
+      .willReturn(new ResponseDefinitionBuilder()
+        .withBody(readFile("responses/rmapi/holdings/holdings/get-holdings.json"))));
+
+    Async async = context.async();
+    interceptor = interceptor(HOLDINGS_SERVICE_ADDRESS, SAVE_HOLDINGS_ACTION,
+      message -> async.complete());
+    vertx.eventBus().addInterceptor(interceptor);
+
+    LoadServiceFacade proxy = LoadServiceFacade.createProxy(vertx, LOAD_FACADE_ADDRESS);
+    proxy.loadHoldings(new ConfigurationMessage(stubConfiguration, STUB_TENANT));
+    async.await(TIMEOUT);
+  }
+
+  @Test
+  public void shouldLoadSecondPageWhenFirstFails(TestContext context) throws IOException, URISyntaxException {
+    mockGet(new EqualToPattern(HOLDINGS_STATUS_ENDPOINT), "responses/rmapi/holdings/status/get-status-completed.json");
+    UrlPathPattern urlPattern = new UrlPathPattern(new RegexPattern(HOLDINGS_GET_ENDPOINT), true);
+    stubFor(get(urlPattern)
+      .withQueryParam("offset", new EqualToPattern("0"))
+      .willReturn(new ResponseDefinitionBuilder().withStatus(SC_INTERNAL_SERVER_ERROR)
+      ));
+    stubFor(get(urlPattern)
+      .withQueryParam("offset", new EqualToPattern("1"))
+      .willReturn(new ResponseDefinitionBuilder()
+        .withBody(readFile("responses/rmapi/holdings/holdings/get-holdings.json"))));
+
+    Async async = context.async();
+    interceptor = interceptor(HOLDINGS_SERVICE_ADDRESS, SAVE_HOLDINGS_ACTION,
+      message -> async.complete());
+    vertx.eventBus().addInterceptor(interceptor);
+
+    LoadServiceFacade proxy = LoadServiceFacade.createProxy(vertx, LOAD_FACADE_ADDRESS);
+    proxy.loadHoldings(new ConfigurationMessage(stubConfiguration, STUB_TENANT));
+    async.await(TIMEOUT);
+    verify(1, RequestPatternBuilder.newRequestPattern(RequestMethod.GET, urlPattern)
+      .withQueryParam("offset", new EqualToPattern("1"))
+    );
   }
 
   @Ignore("loadHoldings endpoint was changed to return response immediately, " +

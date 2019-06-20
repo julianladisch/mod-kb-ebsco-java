@@ -7,11 +7,15 @@ import static org.folio.repository.holdings.LoadStatusUtils.getLoadStatusInProgr
 import static org.folio.repository.holdings.LoadStatusUtils.getLoadStatusInProgressPopulatedToHoldings;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import io.vertx.core.Vertx;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
+
 import org.glassfish.jersey.internal.util.Producer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -29,19 +33,25 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
   private static final int MAX_COUNT = 5000;
   private static final Logger logger = LoggerFactory.getLogger(LoadServiceFacadeImpl.class);
   private final HoldingsService holdingsService;
-  private long delay;
+  private final int loadPageRetries;
+  private final int loadPageDelay;
+  private long statusRetryDelay;
   private int statusRetryCount;
   private long snapshotRetryDelay;
   private int snapshotRetryCount;
   private Vertx vertx;
   private HoldingsStatusRepository holdingsStatusRepository;
 
-  public LoadServiceFacadeImpl(@Value("${holdings.status.check.delay}") long delay,
+  public LoadServiceFacadeImpl(@Value("${holdings.status.check.delay}") long statusRetryDelay,
                                @Value("${holdings.status.retry.count}") int statusRetryCount,
                                @Value("${holdings.snapshot.retry.delay}") long snapshotRetryDelay,
                                @Value("${holdings.snapshot.retry.count}") int snapshotRetryCount,
+                               @Value("${holdings.page.retry.delay}")int loadPageRetryDelay,
+                               @Value("${holdings.page.retry.count}")int loadPageRetryCount,
                                Vertx vertx) {
-    this.delay = delay;
+    this.loadPageDelay = loadPageRetryDelay;
+    this.loadPageRetries = loadPageRetryCount;
+    this.statusRetryDelay = statusRetryDelay;
     this.statusRetryCount = statusRetryCount;
     this.snapshotRetryDelay = snapshotRetryDelay;
     this.snapshotRetryCount = snapshotRetryCount;
@@ -56,11 +66,8 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     retryOnFailure(snapshotRetryCount, snapshotRetryDelay, () ->
       populateHoldings(loadingService)
         .thenCompose(isSuccessful -> waitForCompleteStatus(statusRetryCount, loadingService))
-        .thenApply(status -> {
-          holdingsService.snapshotCreated(configuration);
-          holdingsStatusRepository.update(getLoadStatusInProgressPopulatedToHoldings(LocalDateTime.now().toString()), configuration.getTenantId());
-          return null;
-        }))
+        .thenCompose(status -> holdingsStatusRepository.update(getLoadStatusInProgressPopulatedToHoldings(LocalDateTime.now().toString()), configuration.getTenantId()))
+        .thenAccept(o -> holdingsService.snapshotCreated(configuration)))
     .exceptionally(throwable -> {
       logger.error("Failed to create snapshot after " + snapshotRetryCount + " retries");
       return null;
@@ -68,16 +75,17 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
   }
 
   @Override
-  public void startLoading(ConfigurationMessage configuration) {
+  public void loadHoldings(ConfigurationMessage configuration) {
     LoadServiceImpl loadingService = new LoadServiceImpl(configuration.getConfiguration(), vertx);
 
     getLoadingStatus(loadingService)
       .thenAccept(status -> {
         Integer totalCount = status.getTotalCount();
         final String tenantId = configuration.getTenantId();
-        holdingsStatusRepository.update(getLoadStatusInProgressLoadingHoldings(LocalDateTime.now().toString(), totalCount), tenantId);
-        loadHoldings(totalCount, tenantId, loadingService);
-        holdingsStatusRepository.update(getLoadStatusCompleted(LocalDateTime.now().toString(), totalCount), tenantId);
+        holdingsStatusRepository.update(getLoadStatusInProgressLoadingHoldings(LocalDateTime.now().toString(), totalCount), tenantId)
+          .thenCompose(o -> loadHoldings(totalCount, tenantId, loadingService))
+          .thenAccept(o ->
+            holdingsStatusRepository.update(getLoadStatusCompleted(LocalDateTime.now().toString(), totalCount), tenantId));
       });
   }
 
@@ -100,7 +108,7 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
   }
 
   public void waitForCompleteStatus(int retries, CompletableFuture<HoldingsLoadStatus> future, LoadService loadingService) {
-    vertx.setTimer(delay, timerId -> getLoadingStatus(loadingService)
+    vertx.setTimer(statusRetryDelay, timerId -> getLoadingStatus(loadingService)
       .thenAccept(loadStatus -> {
         final LoadStatus status = LoadStatus.fromValue(loadStatus.getStatus());
         logger.info("Getting status of stage snapshot: {}.", status);
@@ -124,32 +132,56 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     return loadingService.getLoadingStatus();
   }
 
-  public void loadHoldings(Integer totalCount, String tenantId, LoadService loadingService) {
+  public CompletableFuture<Void> loadHoldings(Integer totalCount, String tenantId, LoadService loadingService) {
     CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
     final int totalRequestCount = getRequestCount(totalCount);
-//    for (int iteration = 1; iteration < totalRequestCount + 1; iteration++) {
-    for (int iteration = totalRequestCount - 1; iteration < totalRequestCount + 1; iteration++) {
-      int finalIteration = iteration;
+
+    List<Integer> pagesToLoad = IntStream.range(0, totalRequestCount).boxed().collect(Collectors.toList());
+    for (Integer page : pagesToLoad) {
       future = future
-        .thenCompose(o -> loadingService.loadHoldings(MAX_COUNT, finalIteration))
-        .thenAccept(holdings -> holdingsService.saveHolding(new HoldingsMessage(holdings.getHoldingsList()), tenantId));
+        .thenCompose(o -> retryOnFailure(loadPageRetries, loadPageDelay, () -> loadingService.loadHoldings(MAX_COUNT, page)))
+        .handle(
+          (holdings, e) ->
+          {
+            if(e == null) {
+              holdingsService.saveHolding(new HoldingsMessage(holdings.getHoldingsList()), tenantId);
+            }
+            else{
+              logger.error("Failed to load holdings page " + page + " with count " + MAX_COUNT, e);
+            }
+            return null;
+          });
     }
+
+    return future;
   }
 
   public <T> CompletableFuture<T> retryOnFailure(int retries, long delay, Producer<CompletableFuture<T>> futureProducer) {
     CompletableFuture<T> future = new CompletableFuture<>();
+    retryOnFailure(retries, delay, future, futureProducer);
+    return future;
+  }
+
+  /**
+   * Runs action provided by futureProducer, if future is completed exceptionally then futureProducer will be called again
+   * after given delay.
+   * @param retries Amount of times action will be retried (e.g. if retries = 2 then futureProducer will be called 2 times)
+   * @param delay delay in milliseconds before action is executed again after failure
+   * @param future future that will be completed when future from futureProducer completes successfully or amount of retries is exceeded
+   * @param futureProducer provides an asynchronous action
+   */
+  private <T> void retryOnFailure(int retries, long delay, CompletableFuture<T> future, Producer<CompletableFuture<T>> futureProducer) {
     futureProducer.call()
       .thenAccept(future::complete)
       .exceptionally(throwable -> {
         if (retries > 1) {
-          logger.error("Failed to create snapshot, will retry in " + delay + " milliseconds");
-          vertx.setTimer(delay, timerId -> retryOnFailure(retries - 1, delay, futureProducer));
+          vertx.setTimer(delay, timerId -> retryOnFailure(retries - 1, delay, future, futureProducer)
+          );
         } else {
           future.completeExceptionally(new IllegalStateException());
         }
         return null;
       });
-    return future;
   }
 
   /**
@@ -163,5 +195,4 @@ public class LoadServiceFacadeImpl implements LoadServiceFacade {
     final int remainder = totalCount % MAX_COUNT;
     return remainder == 0 ? quotient : quotient + 1;
   }
-
 }

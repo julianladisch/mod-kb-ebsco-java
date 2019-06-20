@@ -62,7 +62,7 @@ public class HoldingsServiceImpl implements HoldingsService {
 
   @Override
   public void snapshotCreated(ConfigurationMessage message) {
-      loadServiceFacade.startLoading(message);
+      loadServiceFacade.loadHoldings(message);
   }
 
   private Function<Holding, DbHolding> getHoldingMapping() {
