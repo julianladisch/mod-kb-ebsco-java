@@ -50,7 +50,7 @@ public class HoldingsLoadingStatusFactory {
       .withJsonapi(JSONAPI);
   }
 
-  public static HoldingsLoadingStatus getStatusLoadingHoldings(int totalCount, int importedCount) {
+  public static HoldingsLoadingStatus getStatusLoadingHoldings(int totalCount, int importedCount, int totalPages, int importedPages) {
     return new HoldingsLoadingStatus()
       .withData(new LoadStatusData()
         .withType(STATUS_RECTYPE)
@@ -59,6 +59,8 @@ public class HoldingsLoadingStatusFactory {
             .withName(LoadStatusNameEnum.IN_PROGRESS)
             .withDetail(LoadStatusNameDetailEnum.LOADING_HOLDINGS))
           .withTotalCount(totalCount)
+          .withTotalPages(totalPages)
+          .withImportedPages(importedPages)
           .withImportedCount(importedCount)))
       .withJsonapi(JSONAPI);
   }

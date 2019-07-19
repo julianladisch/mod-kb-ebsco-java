@@ -8,10 +8,16 @@ import static org.folio.repository.DbUtil.mapColumn;
 import static org.folio.repository.holdings.status.HoldingsStatusTableConstants.DELETE_LOADING_STATUS;
 import static org.folio.repository.holdings.status.HoldingsStatusTableConstants.GET_HOLDINGS_STATUS;
 import static org.folio.repository.holdings.status.HoldingsStatusTableConstants.INSERT_LOADING_STATUS;
+import static org.folio.repository.holdings.status.HoldingsStatusTableConstants.UPDATE_IMPORTED_COUNT;
 import static org.folio.repository.holdings.status.HoldingsStatusTableConstants.UPDATE_LOADING_STATUS;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+
+import org.folio.rest.jaxrs.model.HoldingsLoadingStatus;
+import org.folio.rest.persist.PostgresClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -21,11 +27,6 @@ import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
 import io.vertx.ext.sql.ResultSet;
 import io.vertx.ext.sql.UpdateResult;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-import org.folio.rest.jaxrs.model.HoldingsLoadingStatus;
-import org.folio.rest.persist.PostgresClient;
 
 @Component
 public class HoldingsStatusRepositoryImpl implements HoldingsStatusRepository {
@@ -76,6 +77,16 @@ public class HoldingsStatusRepositoryImpl implements HoldingsStatusRepository {
   public CompletableFuture<Void> delete(String tenantId) {
     final String query = String.format(DELETE_LOADING_STATUS, getHoldingsStatusTableName(tenantId));
     LOG.info("Do delete query = " + query);
+    Future<UpdateResult> future = Future.future();
+    PostgresClient postgresClient = PostgresClient.getInstance(vertx, tenantId);
+    postgresClient.execute(query, future);
+    return mapVertxFuture(future).thenApply(result -> null);
+  }
+
+  @Override
+  public CompletableFuture<Void> increaseImportedCount(int holdingsAmount, int pageAmount, String tenantId) {
+    final String query = String.format(UPDATE_IMPORTED_COUNT, getHoldingsStatusTableName(tenantId), holdingsAmount);
+    LOG.info("Increment imported count query = " + query);
     Future<UpdateResult> future = Future.future();
     PostgresClient postgresClient = PostgresClient.getInstance(vertx, tenantId);
     postgresClient.execute(query, future);

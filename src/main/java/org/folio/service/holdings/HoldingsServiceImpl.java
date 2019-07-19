@@ -1,13 +1,16 @@
 package org.folio.service.holdings;
 
 import static org.folio.common.ListUtils.mapItems;
-import static org.folio.repository.holdings.LoadStatus.COMPLETED;
-import static org.folio.repository.holdings.LoadStatus.IN_PROGRESS;
+import static org.folio.repository.holdings.status.HoldingsLoadingStatusFactory.getLoadStatusFailed;
 import static org.folio.repository.holdings.status.HoldingsLoadingStatusFactory.getStatusCompleted;
 import static org.folio.repository.holdings.status.HoldingsLoadingStatusFactory.getStatusLoadingHoldings;
 import static org.folio.repository.holdings.status.HoldingsLoadingStatusFactory.getStatusPopulatingStagingArea;
+import static org.folio.rest.util.ErrorUtil.createError;
 
 import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -16,54 +19,52 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import org.folio.holdingsiq.model.Holding;
+import org.folio.repository.holdings.HoldingConstants;
+import org.folio.repository.holdings.HoldingInfoInDB;
+import org.folio.repository.holdings.HoldingsRepository;
+import org.folio.repository.holdings.status.HoldingsStatusRepository;
+import org.folio.repository.resources.ResourceInfoInDB;
+import org.folio.rest.util.template.RMAPITemplateContext;
+import org.folio.service.holdings.message.LoadFailedMessage;
+import org.folio.service.holdings.message.SnapshotCreatedMessage;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
 import io.vertx.core.Vertx;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-
-import org.folio.holdingsiq.model.Holding;
-import org.folio.holdingsiq.model.HoldingsLoadStatus;
-import org.folio.repository.holdings.HoldingInfoInDB;
-import org.folio.repository.holdings.HoldingsRepository;
-import org.folio.repository.holdings.LoadStatus;
-import org.folio.repository.holdings.status.HoldingsStatusRepository;
-import org.folio.repository.resources.ResourceInfoInDB;
-import org.folio.rest.jaxrs.model.HoldingsLoadingStatus;
-import org.folio.rest.util.template.RMAPITemplateContext;
 
 @Component
 public class HoldingsServiceImpl implements HoldingsService {
+  public static final DateTimeFormatter POSTGRES_TIMESTAMP_FORMATTER = new DateTimeFormatterBuilder()
+    .parseCaseInsensitive()
+    .append(DateTimeFormatter.ISO_LOCAL_DATE)
+    .appendLiteral(' ')
+    .append(DateTimeFormatter.ISO_LOCAL_TIME)
+    .appendOffset("+HH", "Z")
+    .toFormatter();
 
-  private static final int MAX_COUNT = 5000;
   private static final Logger logger = LoggerFactory.getLogger(HoldingsServiceImpl.class);
-  private Vertx vertx;
-  private long delay;
-  private int retryCount;
   private HoldingsRepository holdingsRepository;
   private HoldingsStatusRepository holdingsStatusRepository;
+  private final LoadServiceFacade loadServiceFacade;
+  private CompletableFuture<Void> currentActionFuture = CompletableFuture.completedFuture(null);
 
   @Autowired
   public HoldingsServiceImpl(Vertx vertx, HoldingsRepository holdingsRepository,
-                             HoldingsStatusRepository holdingsStatusRepository,
-                             @Value("${holdings.status.check.delay}") long delay,
-                             @Value("${holdings.status.retry.count}") int retryCount) {
-    this.vertx = vertx;
+                             HoldingsStatusRepository holdingsStatusRepository) {
     this.holdingsRepository = holdingsRepository;
     this.holdingsStatusRepository = holdingsStatusRepository;
-    this.delay = delay;
-    this.retryCount = retryCount;
+    this.loadServiceFacade = LoadServiceFacade.createProxy(vertx, HoldingConstants.LOAD_FACADE_ADDRESS);
   }
 
-  public CompletableFuture<Void> loadHoldings(RMAPITemplateContext context) {
-    return populateHoldings(context)
-      .thenCompose(isSuccessful -> waitForCompleteStatus(context, retryCount))
-      .thenCompose(loadStatus -> loadHoldings(context, loadStatus.getTotalCount()));
-  }
-
-  private CompletableFuture<Void> updateStatus(HoldingsLoadingStatus status, String tenantId) {
-    return holdingsStatusRepository.update(status, tenantId);
+  @Override
+  public void loadHoldings(RMAPITemplateContext context) {
+    String tenant = context.getOkapiData().getTenant();
+    queueAction(o ->
+      holdingsStatusRepository.update(getStatusPopulatingStagingArea(), tenant)
+        .thenAccept(o2 -> loadServiceFacade.createSnapshot(new ConfigurationMessage(context.getConfiguration(), tenant))));
   }
 
   @Override
@@ -71,88 +72,61 @@ public class HoldingsServiceImpl implements HoldingsService {
     return holdingsRepository.findAllById(getTitleIdsAsList(resourcesResult), tenant);
   }
 
+  @Override
+  public void saveHolding(HoldingsMessage holdings) {
+    queueAction(o ->
+      saveHoldings(holdings.getHoldingList(), Instant.now(), holdings.getTenantId())
+        .thenCompose(o2 -> holdingsStatusRepository.increaseImportedCount(holdings.getHoldingList().size(), 1, holdings.getTenantId())));
+  }
+
+  @Override
+  public void loadingFinished(ConfigurationMessage message) {
+    queueAction(o -> {
+      String tenantId = message.getTenantId();
+      return holdingsStatusRepository.get(tenantId)
+        .thenCompose(status ->
+          holdingsRepository.deleteBeforeTimestamp(ZonedDateTime.parse(status.getData().getAttributes().getStarted(), POSTGRES_TIMESTAMP_FORMATTER).toInstant(), tenantId)
+            .thenCompose(o2 -> holdingsStatusRepository.update(getStatusCompleted(status.getData().getAttributes().getTotalCount()), tenantId))
+        )
+        .exceptionally(throwable -> {
+          setStatusToFailed(tenantId, throwable.getMessage());
+          return null;
+        });
+    });
+  }
+
+  @Override
+  public void snapshotCreated(SnapshotCreatedMessage message) {
+    queueAction(o ->
+    holdingsStatusRepository.update(getStatusLoadingHoldings(
+      message.getTotalCount(), 0, message.getTotalPages(), 0), message.getTenantId())
+      .thenAccept(o2 ->
+        loadServiceFacade.loadHoldings(new ConfigurationMessage(message.getConfiguration(), message.getTenantId()))));
+  }
+
+  @Override
+  public void snapshotFailed(LoadFailedMessage message) {
+    queueAction(o -> setStatusToFailed(message.getTenantId(), message.getErrorMessage()));
+  }
+
+  @Override
+  public void loadingFailed(LoadFailedMessage message) {
+    queueAction(o -> setStatusToFailed(message.getTenantId(), message.getErrorMessage()));
+  }
+
+  private void queueAction(Function<Void, CompletableFuture<Void>> action){
+    currentActionFuture = currentActionFuture
+      .thenCompose(action);
+  }
+
+  private CompletableFuture<Void> setStatusToFailed(String tenantId, String message) {
+    return holdingsStatusRepository.update(getLoadStatusFailed(createError(message, null).getErrors()),
+      tenantId);
+  }
+
   private List<String> getTitleIdsAsList(List<ResourceInfoInDB> resources){
     return mapItems(resources, dbResource -> dbResource.getId().getProviderIdPart() + "-"
       + dbResource.getId().getPackageIdPart() + "-" + dbResource.getId().getTitleIdPart());
-  }
-
-  private CompletableFuture<Void> populateHoldings(RMAPITemplateContext context) {
-    return getLoadingStatus(context).thenCompose(loadStatus -> {
-      final LoadStatus other = LoadStatus.fromValue(loadStatus.getStatus());
-      if (IN_PROGRESS.equals(other)) {
-        return CompletableFuture.completedFuture(null);
-      } else {
-        logger.info("Start populating holdings to stage environment.");
-        return context.getLoadingService().populateHoldings();
-      }
-    }).thenAccept(o -> updateStatus(getStatusPopulatingStagingArea(), context.getOkapiData().getTenant()));
-  }
-
-  public CompletableFuture<HoldingsLoadStatus> waitForCompleteStatus(RMAPITemplateContext context,  int retryCount) {
-    CompletableFuture<HoldingsLoadStatus> future = new CompletableFuture<>();
-    waitForCompleteStatus(context, retryCount, future);
-    return future;
-  }
-
-  public void waitForCompleteStatus(RMAPITemplateContext context, int retries, CompletableFuture<HoldingsLoadStatus> future) {
-    vertx.setTimer(delay, timerId -> getLoadingStatus(context)
-      .thenAccept(loadStatus -> {
-        final LoadStatus status = LoadStatus.fromValue(loadStatus.getStatus());
-        logger.info("Getting status of stage snapshot: {}.", status);
-        if (COMPLETED.equals(status)) {
-          future.complete(loadStatus);
-        } else if (IN_PROGRESS.equals(status)) {
-          if (retries <= 0) {
-            throw new IllegalStateException("Failed to get status with status response:" + loadStatus);
-          }
-          waitForCompleteStatus(context, retries - 1, future);
-        } else {
-          future.completeExceptionally(new IllegalStateException("Failed to get status with status response:" + loadStatus));
-        }
-      }).exceptionally(throwable -> {
-        future.completeExceptionally(throwable);
-        return null;
-      }));
-  }
-
-  public CompletableFuture<Void> loadHoldings(RMAPITemplateContext context, Integer totalCount) {
-    final String tenantId = context.getOkapiData().getTenant();
-    CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
-    final Instant updatedAt = Instant.now();
-    for (int iteration = 1; iteration < getRequestCount(totalCount) + 1; iteration++) {
-      int finalIteration = iteration;
-      future = future
-        .thenCompose(o -> context.getLoadingService().loadHoldings(MAX_COUNT, finalIteration))
-        .thenCompose(holding -> saveHoldings(holding.getHoldingsList(), updatedAt, tenantId))
-        .thenCompose(o -> updateStatus(getStatusLoadingHoldings(totalCount,
-          calculateImportedCount(finalIteration, totalCount)), tenantId));
-    }
-    future = future
-      .thenCompose(o -> holdingsRepository.deleteByTimeStamp(updatedAt, tenantId))
-      .thenCompose(o -> updateStatus(getStatusCompleted(totalCount), tenantId));
-    return future;
-  }
-
-  private int calculateImportedCount(int iteration, int totalCount) {
-    final int amount = iteration * MAX_COUNT;
-    return amount >= totalCount ? totalCount : amount;
-  }
-
-  /**
-   * Defines an amount of request needed to load all holdings from the staged area
-   *
-   * @param totalCount - total records count
-   * @return number of requests
-   *
-   */
-  private int getRequestCount(Integer totalCount) {
-    final int quotient = totalCount / MAX_COUNT;
-    final int remainder = totalCount % MAX_COUNT;
-    return remainder == 0 ? quotient : quotient + 1;
-  }
-
-  private CompletableFuture<HoldingsLoadStatus> getLoadingStatus(RMAPITemplateContext context) {
-    return context.getLoadingService().getLoadingStatus();
   }
 
   private CompletableFuture<Void> saveHoldings(List<Holding> holdings, Instant updatedAt, String tenantId) {
