@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.context.support.PropertySourcesPlaceholderConfigurer;
 import org.springframework.core.convert.ConversionService;
 import org.springframework.core.convert.converter.Converter;
@@ -37,6 +38,7 @@ import org.folio.rmapi.cache.VendorCacheKey;
   "org.folio.rest.util.template",
   "org.folio.repository",
   "org.folio.service"})
+@Import(org.folio.spring.ApplicationConfig.class)
 public class ApplicationConfig {
   @Bean
   public PropertySourcesPlaceholderConfigurer placeholderConfigurer() {
